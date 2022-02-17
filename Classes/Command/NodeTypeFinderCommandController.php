@@ -28,6 +28,9 @@ class NodeTypeFinderCommandController extends CommandController
      * List the URLs of all pages where a node of the specified type occurs.
      *
      * @param string $nodeTypeName
+     * @param bool $showInvisible
+     * @param bool $showRemoved
+     * @param bool $showInaccessible
      * @throws \Neos\Eel\Exception
      * @throws \Neos\Flow\Http\Exception
      * @throws \Neos\Flow\Mvc\Routing\Exception\MissingActionNameException
@@ -36,12 +39,20 @@ class NodeTypeFinderCommandController extends CommandController
      * @throws \Neos\Flow\Security\Exception
      * @throws \Neos\Neos\Exception
      */
-    public function listNodeTypeOccurrencesCommand(string $nodeTypeName): void
+    public function listNodeTypeOccurrencesCommand(
+        string $nodeTypeName,
+        bool $showInvisible = false,
+        bool $showRemoved = false,
+        bool $showInaccessible = false
+    ): void
     {
         $this->output->outputTable($this->nodeTypeFinderService->findNodeTypeOccurrences(
             $nodeTypeName,
-            self::buildControllerContext()
-        ), ['Occurrence on page:']);
+            self::buildControllerContext(),
+            $showInvisible,
+            $showRemoved,
+            $showInaccessible
+        ), ['Occurrence on page:', 'Page name:']);
     }
 
     private static function buildControllerContext(): ControllerContext

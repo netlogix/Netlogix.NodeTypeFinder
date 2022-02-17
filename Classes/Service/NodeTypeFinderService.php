@@ -40,11 +40,23 @@ class NodeTypeFinderService
      * @throws \Neos\Flow\Security\Exception
      * @throws \Neos\Neos\Exception
      */
-    public function findNodeTypeOccurrences(string $nodeTypeName, ControllerContext $controllerContext): array
+    public function findNodeTypeOccurrences(
+        string $nodeTypeName,
+        ControllerContext $controllerContext,
+        bool $invisibleContentShown = false,
+        bool $removedContentShown = false,
+        bool $inaccessibleContentShown = false
+    ): array
     {
         $occurrences = [];
 
-        $context = $this->contextFactory->create(['workspaceName' => 'live']);
+        $contextFactorySettings = [
+            'workspaceName' => 'live',
+            'invisibleContentShown' => $invisibleContentShown,
+            'removedContentShown' => $removedContentShown,
+            'inaccessibleContentShown' => $inaccessibleContentShown
+        ];
+        $context = $this->contextFactory->create($contextFactorySettings);
 
         $nodes = (new FlowQuery([$context->getCurrentSiteNode()]))
             ->find('/')
