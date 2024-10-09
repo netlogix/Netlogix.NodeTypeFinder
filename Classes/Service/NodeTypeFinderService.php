@@ -10,6 +10,7 @@ use Neos\Flow\Annotations as Flow;
 use Neos\ContentRepository\Domain\Model\NodeInterface;
 use Neos\Eel\FlowQuery\FlowQuery;
 use Neos\Flow\Mvc\Controller\ControllerContext;
+use Neos\Flow\Utility\Algorithms;
 use Neos\Neos\Service\LinkingService;
 use Neos\ContentRepository\Domain\Service\ContextFactoryInterface;
 use Neos\Neos\Service\UserService;
@@ -48,6 +49,8 @@ class NodeTypeFinderService
      * @Flow\Inject
      */
     protected $nodeTypeManager;
+
+    protected $limitExceeded = false;
 
     /**
      * @param string $nodeTypeName
@@ -93,19 +96,39 @@ class NodeTypeFinderService
         return array_map(fn (NodeType $nodeType) => ['name' => $nodeType->getName(), 'label' => $nodeType->getLabel()], $nodeTypes);
     }
 
+    /**
+     * @return bool
+     */
+    public function isLimitExceeded(): bool
+    {
+        return $this->limitExceeded;
+    }
+
     private function findNodeTypeOccurrencesInAllDimensions(string $nodeTypeName): iterable
     {
         $dimensionCombinations = $this->contentDimensionCombinator->getAllAllowedCombinations();
+        $count = 0;
+        $maxResults = 100;
 
         foreach ($dimensionCombinations as $dimensionCombination) {
-            yield from $this->findNodeTypeOccurrencesInDimensions(
-                $nodeTypeName,
-                $dimensionCombination
-            );
+            if ($count >= $maxResults) {
+                $this->limitExceeded = true;
+                break;
+            }
+
+            foreach ($this->findNodeTypeOccurrencesInDimensions($nodeTypeName, $dimensionCombination, $maxResults - $count) as $node) {
+                yield $node;
+                $count++;
+
+                if ($count >= $maxResults) {
+                    $this->limitExceeded = true;
+                    break;
+                }
+            }
         }
     }
 
-    private function findNodeTypeOccurrencesInDimensions(string $nodeTypeName, array $dimensionValues): iterable
+    private function findNodeTypeOccurrencesInDimensions(string $nodeTypeName, array $dimensionValues, int $remainingLimit): iterable
     {
         $context = $this->contextFactory->create([
             'workspaceName' => 'live',
@@ -115,6 +138,7 @@ class NodeTypeFinderService
 
         yield from (new FlowQuery([$context->getRootNode()]))
             ->find('[instanceof '.$nodeTypeName.']')
+            ->slice($remainingLimit)
             ->get();
     }
 
