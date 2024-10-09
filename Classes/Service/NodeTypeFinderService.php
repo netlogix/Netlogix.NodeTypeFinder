@@ -10,7 +10,6 @@ use Neos\Flow\Annotations as Flow;
 use Neos\ContentRepository\Domain\Model\NodeInterface;
 use Neos\Eel\FlowQuery\FlowQuery;
 use Neos\Flow\Mvc\Controller\ControllerContext;
-use Neos\Flow\Utility\Algorithms;
 use Neos\Neos\Service\LinkingService;
 use Neos\ContentRepository\Domain\Service\ContextFactoryInterface;
 use Neos\Neos\Service\UserService;
