@@ -47,6 +47,7 @@ class NodeTypeFinderController extends AbstractModuleController
 
         if (!empty($searchTerm)) {
             $this->view->assign('occurrences', iterator_to_array($this->search($searchTerm)));
+            $this->view->assign('limitExceeded', $this->nodeTypeFinderService->isLimitExceeded());
         }
     }
 

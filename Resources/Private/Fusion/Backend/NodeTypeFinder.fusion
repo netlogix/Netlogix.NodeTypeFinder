@@ -34,6 +34,11 @@ prototype(Netlogix.NodeTypeFinder:BackendModule) < prototype(Neos.Fusion:Compone
                 No occurrences of NodeType {searchTerm}.
             </div>
         </div>
+        <div class="neos-row" @if.limitExceeded={limitExceeded}>
+            <div class="neos-span12">
+                Occurrences for NodeType {searchTerm} were limited due to a large number of search results.
+            </div>
+        </div>
         <div class="neos-row" @if.noSearchTerm={!searchTerm}>
             <div class="neos-span12">
                 Search for a NodeType to see a list of its occurrences.
