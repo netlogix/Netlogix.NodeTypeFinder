@@ -137,7 +137,7 @@ class NodeTypeFinderService
 
         yield from (new FlowQuery([$context->getRootNode()]))
             ->find('[instanceof '.$nodeTypeName.']')
-            ->slice($remainingLimit)
+            ->slice(0, $remainingLimit)
             ->get();
     }
 
