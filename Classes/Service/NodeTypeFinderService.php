@@ -49,6 +49,12 @@ class NodeTypeFinderService
      */
     protected $nodeTypeManager;
 
+    /**
+     * @var int
+     * @Flow\InjectConfiguration(path="maxResults")
+     */
+    protected int $maxResults = 100;
+
     protected $limitExceeded = false;
 
     /**
@@ -107,19 +113,18 @@ class NodeTypeFinderService
     {
         $dimensionCombinations = $this->contentDimensionCombinator->getAllAllowedCombinations();
         $count = 0;
-        $maxResults = 100;
 
         foreach ($dimensionCombinations as $dimensionCombination) {
-            if ($count >= $maxResults) {
+            if ($count >= $this->maxResults) {
                 $this->limitExceeded = true;
                 break;
             }
 
-            foreach ($this->findNodeTypeOccurrencesInDimensions($nodeTypeName, $dimensionCombination, $maxResults - $count) as $node) {
+            foreach ($this->findNodeTypeOccurrencesInDimensions($nodeTypeName, $dimensionCombination, $this->maxResults - $count) as $node) {
                 yield $node;
                 $count++;
 
-                if ($count >= $maxResults) {
+                if ($count >= $this->maxResults) {
                     $this->limitExceeded = true;
                     break;
                 }
