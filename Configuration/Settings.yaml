@@ -1,3 +1,7 @@
+Netlogix:
+  NodeTypeFinder:
+    maxResults: 100
+
 Neos:
   Neos:
     modules:
