@@ -5,7 +5,7 @@ Netlogix:
 Neos:
   Neos:
     modules:
-      administration:
+      management:
         submodules:
           nodeTypeFinderModule:
             label: 'NodeType Finder'
