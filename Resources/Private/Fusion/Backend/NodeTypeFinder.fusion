@@ -11,7 +11,7 @@ prototype(Netlogix.NodeTypeFinder:BackendModule) < prototype(Neos.Fusion:Compone
                     <Neos.Fusion.Form:Select attributes.class="neos-span4">
                         <Neos.Fusion:Loop items={nodeTypes} itemName="nodeType" @children="itemRenderer">
                             <Neos.Fusion.Form:Select.Option option.value={nodeType.name}>
-                                {nodeType.label ? nodeType.label + ' (' + nodeType.name + ')' : nodeType.name}
+                                {(nodeType.label && !String.endsWith(nodeType.label, ':ui.label')) ? (nodeType.label + ' (' + nodeType.name + ')') : nodeType.name}
                             </Neos.Fusion.Form:Select.Option>
                         </Neos.Fusion:Loop>
                     </Neos.Fusion.Form:Select>
