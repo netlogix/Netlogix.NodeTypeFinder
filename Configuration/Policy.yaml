@@ -1,9 +1,17 @@
 privilegeTargets:
   'Neos\Neos\Security\Authorization\Privilege\ModulePrivilege':
     'Netlogix.NodeTypeFinder:BackendModule':
-      matcher: 'administration/nodeTypeFinderModule'
+      matcher: 'management/nodeTypeFinderModule'
 
 roles:
+  'Netlogix.NodeTypeFinder:NodeTypeFinder':
+    label: 'NodeType Finder'
+    description: 'Allows access to the NodeTypeFinder backend module'
+    privileges:
+      -
+        privilegeTarget: 'Netlogix.NodeTypeFinder:BackendModule'
+        permission: GRANT
+
   'Neos.Neos:Administrator':
     privileges:
       -
