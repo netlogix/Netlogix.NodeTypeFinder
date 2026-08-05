@@ -30,7 +30,9 @@ class NodeTypeFinderController extends AbstractModuleController
     }
 
     /**
-     * @param string $searchTerm
+     * @param string|null $searchTerm
+     * @param string|null $siteNodeName
+     * @param string|null $dimensions Serialized dimension combination as offered by the dimension select
      *
      * @throws \Neos\Eel\Exception
      * @throws \Neos\Flow\Http\Exception
@@ -40,22 +42,47 @@ class NodeTypeFinderController extends AbstractModuleController
      * @throws \Neos\Flow\Security\Exception
      * @throws \Neos\Neos\Exception
      */
-    public function indexAction(?string $searchTerm = null): void
+    public function indexAction(?string $searchTerm = null, ?string $siteNodeName = null, ?string $dimensions = null): void
     {
+        $sites = $this->nodeTypeFinderService->getSites();
+        $dimensionCombinations = $this->nodeTypeFinderService->getDimensionCombinations();
+
+        // Only the initial view has no filters at all, a submitted form always sends them.
+        // "All sites"/"all dimensions" arrive as an empty string, so they are not prefilled
+        // with the default again.
+        if ($siteNodeName === null) {
+            $siteNodeName = $this->nodeTypeFinderService->getCurrentSiteNodeName();
+        }
+        if ($dimensions === null) {
+            $dimensions = $this->nodeTypeFinderService->getDefaultDimensionCombination();
+        }
+        if ($dimensionCombinations === []) {
+            $dimensions = null;
+        }
+
         $this->view->assign('searchTerm', $searchTerm);
         $this->view->assign('nodeTypes', $this->nodeTypeFinderService->getRelevantNodeTypes());
+        $this->view->assign('sites', $sites);
+        $this->view->assign('siteNodeName', $siteNodeName);
+        $this->view->assign('dimensionCombinations', $dimensionCombinations);
+        $this->view->assign('dimensions', $dimensions);
 
         if (!empty($searchTerm)) {
-            $this->view->assign('occurrences', iterator_to_array($this->search($searchTerm)));
+            $this->view->assign(
+                'occurrences',
+                iterator_to_array($this->search($searchTerm, $siteNodeName, $dimensions))
+            );
             $this->view->assign('limitExceeded', $this->nodeTypeFinderService->isLimitExceeded());
         }
     }
 
-    private function search(string $searchTerm): Generator
+    private function search(string $searchTerm, ?string $siteNodeName, ?string $dimensions): Generator
     {
         $occurrences = $this->nodeTypeFinderService->findNodeTypeOccurrences(
             $searchTerm,
-            $this->controllerContext
+            $this->controllerContext,
+            $siteNodeName ?: null,
+            $this->nodeTypeFinderService->resolveDimensionValues($dimensions)
         );
 
         foreach ($occurrences as $occurrence) {

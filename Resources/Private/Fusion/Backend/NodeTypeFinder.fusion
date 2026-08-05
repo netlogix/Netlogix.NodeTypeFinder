@@ -5,45 +5,101 @@ Netlogix.NodeTypeFinder.NodeTypeFinderController.index = Netlogix.NodeTypeFinder
 
 prototype(Netlogix.NodeTypeFinder:BackendModule) < prototype(Neos.Fusion:Component) {
     renderer = afx`
-        <Neos.Fusion.Form:Form form.data.searchTerm={searchTerm} form.target.action="index">
-            <div class="neos-row">
-                <Neos.Fusion.Form:Neos.BackendModule.FieldContainer attributes.class="neos-span4" field.name="searchTerm" >
-                    <Neos.Fusion.Form:Select attributes.class="neos-span4">
-                        <Neos.Fusion:Loop items={nodeTypes} itemName="nodeType" @children="itemRenderer">
-                            <Neos.Fusion.Form:Select.Option option.value={nodeType.name}>
-                                {(nodeType.label && !String.endsWith(nodeType.label, ':ui.label')) ? (nodeType.label + ' (' + nodeType.name + ')') : nodeType.name}
-                            </Neos.Fusion.Form:Select.Option>
-                        </Neos.Fusion:Loop>
-                    </Neos.Fusion.Form:Select>
-                </Neos.Fusion.Form:Neos.BackendModule.FieldContainer>
-                <Neos.Fusion.Form:Button attributes.class="neos-button neos-button-primary">
-                    Search
-                </Neos.Fusion.Form:Button>
-            </div>
+        <Neos.Fusion.Form:Form
+            form.data.searchTerm={searchTerm}
+            form.data.siteNodeName={siteNodeName}
+            form.data.dimensions={dimensions}
+            form.target.action="index"
+        >
+            <fieldset>
+                <div class="neos-row-fluid">
+                    <div class="neos-span4">
+                        <div class="neos-control-group">
+                            <label class="neos-control-label" for="searchTerm">
+                                <i class="fas fa-file"></i> NodeType
+                            </label>
+                            <div class="neos-controls neos-select">
+                                <Neos.Fusion.Form:Select field.name="searchTerm" attributes.id="searchTerm" attributes.class="neos-span12">
+                                    <Neos.Fusion:Loop items={nodeTypes} itemName="nodeType" @children="itemRenderer">
+                                        <Neos.Fusion.Form:Select.Option option.value={nodeType.name}>
+                                            {(nodeType.label && !String.endsWith(nodeType.label, ':ui.label')) ? (nodeType.label + ' (' + nodeType.name + ')') : nodeType.name}
+                                        </Neos.Fusion.Form:Select.Option>
+                                    </Neos.Fusion:Loop>
+                                </Neos.Fusion.Form:Select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="neos-span4">
+                        <div class="neos-control-group">
+                            <label class="neos-control-label" for="siteNodeName">
+                                <i class="fas fa-globe"></i> Site
+                            </label>
+                            <div class="neos-controls neos-select">
+                                <Neos.Fusion.Form:Select field.name="siteNodeName" attributes.id="siteNodeName" attributes.class="neos-span12">
+                                    <Neos.Fusion.Form:Select.Option option.value="">
+                                        All sites
+                                    </Neos.Fusion.Form:Select.Option>
+                                    <Neos.Fusion:Loop items={sites} itemName="site" @children="itemRenderer">
+                                        <Neos.Fusion.Form:Select.Option option.value={site.nodeName}>
+                                            {site.label}
+                                        </Neos.Fusion.Form:Select.Option>
+                                    </Neos.Fusion:Loop>
+                                </Neos.Fusion.Form:Select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="neos-span4" @if.hasDimensions={dimensionCombinations}>
+                        <div class="neos-control-group">
+                            <label class="neos-control-label" for="dimensions">
+                                <i class="fas fa-code-branch"></i> Dimensions
+                            </label>
+                            <div class="neos-controls neos-select">
+                                <Neos.Fusion.Form:Select field.name="dimensions" attributes.id="dimensions" attributes.class="neos-span12">
+                                    <Neos.Fusion.Form:Select.Option option.value="">
+                                        All dimensions
+                                    </Neos.Fusion.Form:Select.Option>
+                                    <Neos.Fusion:Loop items={dimensionCombinations} itemName="dimensionCombination" @children="itemRenderer">
+                                        <Neos.Fusion.Form:Select.Option option.value={dimensionCombination.value}>
+                                            {dimensionCombination.label}
+                                        </Neos.Fusion.Form:Select.Option>
+                                    </Neos.Fusion:Loop>
+                                </Neos.Fusion.Form:Select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="neos-control-group">
+                    <Neos.Fusion.Form:Button attributes.class="neos-button neos-button-primary">
+                        Search
+                    </Neos.Fusion.Form:Button>
+                </div>
+            </fieldset>
         </Neos.Fusion.Form:Form>
         <fieldset>
             <legend>Occurrences of NodeType</legend>
-        </fieldset>
-        <table class="neos-table" @if.hasOccurences={occurrences}>
-            <Neos.Fusion:Loop items={occurrences} itemName="occurrence" @children="itemRenderer">
-                <Netlogix.NodeTypeFinder:BackendModule.Occurrence/>
-            </Neos.Fusion:Loop>
-        </table>
-        <div class="neos-row" @if.noOccurences={!occurrences && searchTerm}>
-            <div class="neos-span12">
+            <table class="neos-table" @if.hasOccurences={occurrences}>
+                <thead>
+                    <tr>
+                        <th>Page</th>
+                        <th>URL</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <Neos.Fusion:Loop items={occurrences} itemName="occurrence" @children="itemRenderer">
+                        <Netlogix.NodeTypeFinder:BackendModule.Occurrence/>
+                    </Neos.Fusion:Loop>
+                </tbody>
+            </table>
+            <p @if.noOccurences={!occurrences && searchTerm}>
                 No occurrences of NodeType {searchTerm}.
-            </div>
-        </div>
-        <div class="neos-row" @if.limitExceeded={limitExceeded}>
-            <div class="neos-span12">
+            </p>
+            <p @if.limitExceeded={limitExceeded}>
                 Occurrences for NodeType {searchTerm} were limited due to a large number of search results.
-            </div>
-        </div>
-        <div class="neos-row" @if.noSearchTerm={!searchTerm}>
-            <div class="neos-span12">
+            </p>
+            <p @if.noSearchTerm={!searchTerm}>
                 Search for a NodeType to see a list of its occurrences.
-            </div>
-        </div>
+            </p>
+        </fieldset>
     `
 }
 
