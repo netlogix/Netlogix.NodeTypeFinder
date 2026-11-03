@@ -5,20 +5,15 @@ namespace Netlogix\NodeTypeFinder\Command;
 
 use GuzzleHttp\Psr7\ServerRequest;
 use GuzzleHttp\Psr7\Uri;
-use Neos\ContentRepository\Domain\Model\NodeInterface;
-use Neos\ContentRepository\TypeConverter\NodeConverter;
+use Neos\ContentRepository\Core\SharedModel\Node\NodeAddress;
+use Neos\ContentRepositoryRegistry\ContentRepositoryRegistry;
 use Neos\Flow\Annotations as Flow;
 use Neos\Flow\Cli\CommandController;
-use Neos\Flow\Http\ServerRequestAttributes;
 use Neos\Flow\Mvc\ActionRequest;
-use Neos\Flow\Mvc\ActionResponse;
-use Neos\Flow\Mvc\Controller\Arguments;
-use Neos\Flow\Mvc\Controller\ControllerContext;
-use Neos\Flow\Mvc\Routing\Dto\RouteParameters;
-use Neos\Flow\Mvc\Routing\UriBuilder;
-use Neos\Flow\Property\PropertyMapper;
-use Neos\Flow\Property\PropertyMappingConfiguration;
 use Neos\Neos\Domain\Repository\SiteRepository;
+use Neos\Neos\Domain\SubtreeTagging\NeosVisibilityConstraints;
+use Neos\Neos\FrontendRouting\NodeUriBuilderFactory;
+use Neos\Neos\FrontendRouting\SiteDetection\SiteDetectionResult;
 use Netlogix\NodeTypeFinder\Service\NodeTypeFinderService;
 use Psr\Http\Message\UriInterface;
 
@@ -34,16 +29,22 @@ class NodeTypeFinderCommandController extends CommandController
     protected $nodeTypeFinderService;
 
     /**
-     * @var PropertyMapper
+     * @var ContentRepositoryRegistry
      * @Flow\Inject
      */
-    protected $propertyMapper;
+    protected $contentRepositoryRegistry;
 
     /**
      * @var SiteRepository
      * @Flow\Inject
      */
     protected $siteRepository;
+
+    /**
+     * @var NodeUriBuilderFactory
+     * @Flow\Inject
+     */
+    protected $nodeUriBuilderFactory;
 
     /**
      * List the URLs of all pages where a node of the specified type occurs.
@@ -61,59 +62,45 @@ class NodeTypeFinderCommandController extends CommandController
     {
         $this->output->outputTable($this->nodeTypeFinderService->findNodeTypeOccurrences(
             $nodeTypeName,
-            $this->buildControllerContext()
+            $this->buildActionRequest()
         ), ['Occurrence on page:']);
     }
 
     /**
-     * Resolve the context path of a node to a uri.
+     * Resolve the serialized node address of a node to a uri.
      */
-    public function resolveContextPathToUriCommand(string $contextPath): void
+    public function resolveNodeAddressToUriCommand(string $nodeAddress): void
     {
-        $configuration = new PropertyMappingConfiguration();
-        $configuration->setTypeConverterOption(NodeConverter::class, NodeConverter::INVISIBLE_CONTENT_SHOWN, true);
-        $node = $this->propertyMapper->convert($contextPath, NodeInterface::class, $configuration);
+        $nodeAddress = NodeAddress::fromJsonString($nodeAddress);
+        $subgraph = $this->contentRepositoryRegistry->get($nodeAddress->contentRepositoryId)
+            ->getContentGraph($nodeAddress->workspaceName)
+            ->getSubgraph($nodeAddress->dimensionSpacePoint, NeosVisibilityConstraints::excludeRemoved());
 
-        $documentNode = $this->nodeTypeFinderService->findClosestDocumentNode($node);
+        $node = $subgraph->findNodeById($nodeAddress->aggregateId);
+        $documentNode = $node ? $this->nodeTypeFinderService->findClosestDocumentNode($node, $subgraph) : null;
         if (!$documentNode) {
-            $this->outputLine('No document node found for node %s', [$node->getIdentifier()]);
+            $this->outputLine('No document node found for node %s', [$nodeAddress->aggregateId->value]);
             $this->quit(1);
         }
         $visible = $this->nodeTypeFinderService->isNodeVisible($documentNode);
-        $uri = $this->nodeTypeFinderService->buildNodeUri($documentNode, $this->buildControllerContext(), $visible);
+        $nodeUriBuilder = $this->nodeUriBuilderFactory->forActionRequest($this->buildActionRequest());
+        $uri = $this->nodeTypeFinderService->buildNodeUri($documentNode, $nodeUriBuilder, $visible);
         if ($uri === null) {
-            $this->outputLine('No URI found for node %s', [$node->getIdentifier()]);
+            $this->outputLine('No URI found for node %s', [$nodeAddress->aggregateId->value]);
             $this->quit(1);
         }
 
         $this->outputLine($uri);
     }
 
-    private function buildControllerContext(): ControllerContext
+    private function buildActionRequest(): ActionRequest
     {
         $site = $this->siteRepository->findDefault();
-        if ($site->getPrimaryDomain()) {
-            $requestUri = $site->getPrimaryDomain()
-                ->__toString();
-        } else {
-            $requestUri = 'http://localhost';
-        }
-        $uri = new Uri($requestUri);
-        $httpRequest = self::createHttpRequestFromGlobals($uri)
-            ->withAttribute(
-                ServerRequestAttributes::ROUTING_PARAMETERS,
-                RouteParameters::createEmpty()->withParameter('requestUriHost', $uri->getHost())
-            );
-        $request = ActionRequest::fromHttpRequest($httpRequest);
-        $uriBuilder = new UriBuilder();
-        $uriBuilder->setRequest($request);
+        $uri = new Uri((string)$site->getPrimaryDomain() ?: 'http://localhost');
+        $httpRequest = SiteDetectionResult::create($site->getNodeName(), $site->getConfiguration()->contentRepositoryId)
+            ->storeInRequest(self::createHttpRequestFromGlobals($uri));
 
-        return new ControllerContext(
-            $request,
-            new ActionResponse(),
-            new Arguments([]),
-            $uriBuilder
-        );
+        return ActionRequest::fromHttpRequest($httpRequest);
     }
 
     private static function createHttpRequestFromGlobals(UriInterface $uri): ServerRequest

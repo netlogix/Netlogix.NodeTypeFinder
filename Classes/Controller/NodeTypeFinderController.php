@@ -80,7 +80,7 @@ class NodeTypeFinderController extends AbstractModuleController
     {
         $occurrences = $this->nodeTypeFinderService->findNodeTypeOccurrences(
             $searchTerm,
-            $this->controllerContext,
+            $this->request,
             $siteNodeName ?: null,
             $this->nodeTypeFinderService->resolveDimensionValues($dimensions)
         );
