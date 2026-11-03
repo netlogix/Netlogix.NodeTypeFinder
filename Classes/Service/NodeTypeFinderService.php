@@ -3,21 +3,30 @@ declare(strict_types=1);
 
 namespace Netlogix\NodeTypeFinder\Service;
 
-use Neos\ContentRepository\Domain\Model\NodeType;
-use Neos\ContentRepository\Domain\Service\ContentDimensionCombinator;
-use Neos\ContentRepository\Domain\Service\ContentDimensionPresetSourceInterface;
-use Neos\ContentRepository\Domain\Service\NodeTypeManager;
+use Neos\ContentRepository\Core\ContentRepository;
+use Neos\ContentRepository\Core\Dimension\ContentDimensionId;
+use Neos\ContentRepository\Core\DimensionSpace\DimensionSpacePoint;
+use Neos\ContentRepository\Core\NodeType\NodeType;
+use Neos\ContentRepository\Core\Projection\ContentGraph\ContentSubgraphInterface;
+use Neos\ContentRepository\Core\Projection\ContentGraph\Filter\FindClosestNodeFilter;
+use Neos\ContentRepository\Core\Projection\ContentGraph\Filter\FindDescendantNodesFilter;
+use Neos\ContentRepository\Core\Projection\ContentGraph\Node;
+use Neos\ContentRepository\Core\SharedModel\Node\NodeAddress;
+use Neos\ContentRepository\Core\SharedModel\Workspace\WorkspaceName;
+use Neos\ContentRepositoryRegistry\ContentRepositoryRegistry;
 use Neos\Flow\Annotations as Flow;
-use Neos\ContentRepository\Domain\Model\NodeInterface;
-use Neos\Eel\FlowQuery\FlowQuery;
-use Neos\Flow\Mvc\Controller\ControllerContext;
+use Neos\Flow\Mvc\ActionRequest;
+use Neos\Flow\Mvc\Exception\NoMatchingRouteException;
 use Neos\Neos\Domain\Model\Site;
+use Neos\Neos\Domain\NodeLabel\NodeLabelGeneratorInterface;
 use Neos\Neos\Domain\Repository\DomainRepository;
 use Neos\Neos\Domain\Repository\SiteRepository;
-use Neos\Neos\Domain\Service\ContentContext;
-use Neos\Neos\Service\LinkingService;
-use Neos\ContentRepository\Domain\Service\ContextFactoryInterface;
-use Neos\Neos\Service\UserService;
+use Neos\Neos\Domain\Service\NodeTypeNameFactory;
+use Neos\Neos\Domain\SubtreeTagging\NeosSubtreeTag;
+use Neos\Neos\Domain\SubtreeTagging\NeosVisibilityConstraints;
+use Neos\Neos\FrontendRouting\NodeUriBuilder;
+use Neos\Neos\FrontendRouting\NodeUriBuilderFactory;
+use Neos\Neos\FrontendRouting\Options;
 
 /**
  * @Flow\Scope("singleton")
@@ -25,28 +34,22 @@ use Neos\Neos\Service\UserService;
 class NodeTypeFinderService
 {
     /**
-     * @var LinkingService
+     * @var ContentRepositoryRegistry
      * @Flow\Inject
      */
-    protected $linkingService;
+    protected $contentRepositoryRegistry;
 
     /**
-     * @var ContextFactoryInterface
+     * @var NodeUriBuilderFactory
      * @Flow\Inject
      */
-    protected $contextFactory;
+    protected $nodeUriBuilderFactory;
 
     /**
-     * @var ContentDimensionCombinator
+     * @var NodeLabelGeneratorInterface
      * @Flow\Inject
      */
-    protected $contentDimensionCombinator;
-
-    /**
-     * @var ContentDimensionPresetSourceInterface
-     * @Flow\Inject
-     */
-    protected $contentDimensionPresetSource;
+    protected $nodeLabelGenerator;
 
     /**
      * @var SiteRepository
@@ -61,18 +64,6 @@ class NodeTypeFinderService
     protected $domainRepository;
 
     /**
-     * @var UserService
-     * @Flow\Inject
-     */
-    protected $userService;
-
-    /**
-     * @var NodeTypeManager
-     * @Flow\Inject
-     */
-    protected $nodeTypeManager;
-
-    /**
      * @var int
      * @Flow\InjectConfiguration(path="maxResults")
      */
@@ -82,31 +73,28 @@ class NodeTypeFinderService
 
     /**
      * @param string $nodeTypeName
-     * @param ControllerContext $controllerContext
+     * @param ActionRequest $actionRequest
      * @param string|null $siteNodeName Restrict the search to a single site, null searches all sites
-     * @param array|null $dimensionValues Restrict the search to a single dimension combination, null searches all
+     * @param DimensionSpacePoint|null $dimensionSpacePoint Restrict the search to a single dimension space point, null searches all
      * @return array
      */
     public function findNodeTypeOccurrences(
         string $nodeTypeName,
-        ControllerContext $controllerContext,
+        ActionRequest $actionRequest,
         ?string $siteNodeName = null,
-        ?array $dimensionValues = null
+        ?DimensionSpacePoint $dimensionSpacePoint = null
     ): array {
+        $this->limitExceeded = false;
+        $nodeUriBuilder = $this->nodeUriBuilderFactory->forActionRequest($actionRequest);
         $occurrences = [];
-        $site = $siteNodeName !== null ? $this->siteRepository->findOneByNodeName($siteNodeName) : null;
 
-        foreach ($this->findNodeTypeOccurrencesInDimensionCombinations($nodeTypeName, $site, $dimensionValues) as $node) {
-            if (!$node instanceof NodeInterface) {
-                continue;
-            }
-
-            $documentNode = $this->findClosestDocumentNode($node);
+        foreach ($this->findNodeTypeOccurrencesInSites($nodeTypeName, $siteNodeName, $dimensionSpacePoint) as [$node, $subgraph]) {
+            $documentNode = $this->findClosestDocumentNode($node, $subgraph);
             if (!$documentNode) {
                 continue;
             }
             $visible = $this->isNodeVisible($documentNode);
-            $uri = $this->buildNodeUri($documentNode, $controllerContext, $visible);
+            $uri = $this->buildNodeUri($documentNode, $nodeUriBuilder, $visible);
             if ($uri === null) {
                 continue;
             }
@@ -114,7 +102,7 @@ class NodeTypeFinderService
             if (!array_key_exists($uri, $occurrences)) {
                 $occurrences[$uri] = [
                     'url' => str_replace('./', '', $uri),
-                    'label' => $documentNode->getLabel(),
+                    'label' => $this->nodeLabelGenerator->getLabel($documentNode),
                     'visible' => $visible,
                 ];
             }
@@ -125,10 +113,16 @@ class NodeTypeFinderService
 
     public function getRelevantNodeTypes(): array
     {
-        $nodeTypes = $this->nodeTypeManager->getNodeTypes(false);
-        $nodeTypes = array_filter($nodeTypes, fn (NodeType $nodeType) => $nodeType->isOfType('Neos.Neos:Document') || $nodeType->isOfType('Neos.Neos:Content'));
+        $nodeTypes = [];
+        foreach ($this->getContentRepositories() as $contentRepository) {
+            foreach ($contentRepository->getNodeTypeManager()->getNodeTypes(false) as $nodeType) {
+                if ($nodeType->isOfType(NodeTypeNameFactory::NAME_DOCUMENT) || $nodeType->isOfType(NodeTypeNameFactory::NAME_CONTENT)) {
+                    $nodeTypes[$nodeType->name->value] = $nodeType;
+                }
+            }
+        }
 
-        return array_map(fn (NodeType $nodeType) => ['name' => $nodeType->getName(), 'label' => $nodeType->getLabel()], $nodeTypes);
+        return array_map(fn (NodeType $nodeType) => ['name' => $nodeType->name->value, 'label' => $nodeType->getLabel()], array_values($nodeTypes));
     }
 
     /**
@@ -139,7 +133,7 @@ class NodeTypeFinderService
     public function getSites(): array
     {
         $sites = array_map(
-            fn (Site $site) => ['nodeName' => $site->getNodeName(), 'label' => $site->getName()],
+            fn (Site $site) => ['nodeName' => $site->getNodeName()->value, 'label' => $site->getName()],
             $this->siteRepository->findAll()->toArray()
         );
 
@@ -153,39 +147,34 @@ class NodeTypeFinderService
      */
     public function getCurrentSiteNodeName(): ?string
     {
-        $domain = $this->domainRepository->findOneByActiveRequest();
-        $site = $domain !== null ? $domain->getSite() : $this->siteRepository->findDefault();
-
-        return $site !== null ? $site->getNodeName() : null;
+        return $this->getCurrentSite()?->getNodeName()->value;
     }
 
     /**
-     * All allowed dimension combinations, empty if no content dimensions are configured.
+     * All allowed dimension space points, empty if no content dimensions are configured.
      *
      * @return array<int, array{value: string, label: string}>
      */
     public function getDimensionCombinations(): array
     {
-        if ($this->contentDimensionPresetSource->getAllPresets() === []) {
-            return [];
-        }
-
         $combinations = [];
-        foreach ($this->contentDimensionCombinator->getAllAllowedCombinations() as $dimensionValues) {
-            if ($dimensionValues === []) {
-                continue;
+        foreach ($this->getContentRepositories() as $contentRepository) {
+            foreach ($contentRepository->getVariationGraph()->getDimensionSpacePoints() as $dimensionSpacePoint) {
+                if ($dimensionSpacePoint->coordinates === []) {
+                    continue;
+                }
+                $combinations[$dimensionSpacePoint->hash] = [
+                    'value' => $dimensionSpacePoint->toJson(),
+                    'label' => $this->buildDimensionCombinationLabel($contentRepository, $dimensionSpacePoint),
+                ];
             }
-            $combinations[] = [
-                'value' => self::serializeDimensionValues($dimensionValues),
-                'label' => $this->buildDimensionCombinationLabel($dimensionValues),
-            ];
         }
 
-        return $combinations;
+        return array_values($combinations);
     }
 
     /**
-     * The serialized default dimension combination, null if no content dimensions are configured.
+     * The serialized default dimension space point of the current site, null if no content dimensions are configured.
      */
     public function getDefaultDimensionCombination(): ?string
     {
@@ -194,35 +183,28 @@ class NodeTypeFinderService
             return null;
         }
 
-        $dimensionValues = [];
-        foreach (array_keys($this->contentDimensionPresetSource->getAllPresets()) as $dimensionName) {
-            $defaultPreset = $this->contentDimensionPresetSource->getDefaultPreset($dimensionName);
-            if ($defaultPreset === null || !isset($defaultPreset['values'])) {
-                return $combinations[0]['value'];
-            }
-            $dimensionValues[$dimensionName] = $defaultPreset['values'];
-        }
-
-        $serialized = self::serializeDimensionValues($dimensionValues);
+        $serialized = $this->getCurrentSite()?->getConfiguration()->defaultDimensionSpacePoint->toJson();
 
         return $this->resolveDimensionValues($serialized) !== null ? $serialized : $combinations[0]['value'];
     }
 
     /**
-     * Convert a serialized dimension combination back into dimension values.
+     * Convert a serialized dimension space point back into a dimension space point.
      *
-     * Only combinations that are allowed by the configured presets are accepted,
-     * everything else resolves to null which means "search all combinations".
+     * Only dimension space points that are allowed by a content repository are accepted,
+     * everything else resolves to null which means "search all dimension space points".
      */
-    public function resolveDimensionValues(?string $serializedDimensionValues): ?array
+    public function resolveDimensionValues(?string $serializedDimensionValues): ?DimensionSpacePoint
     {
         if ($serializedDimensionValues === null || $serializedDimensionValues === '') {
             return null;
         }
 
-        foreach ($this->contentDimensionCombinator->getAllAllowedCombinations() as $dimensionValues) {
-            if ($dimensionValues !== [] && self::serializeDimensionValues($dimensionValues) === $serializedDimensionValues) {
-                return $dimensionValues;
+        foreach ($this->getContentRepositories() as $contentRepository) {
+            foreach ($contentRepository->getVariationGraph()->getDimensionSpacePoints() as $dimensionSpacePoint) {
+                if ($dimensionSpacePoint->coordinates !== [] && $dimensionSpacePoint->toJson() === $serializedDimensionValues) {
+                    return $dimensionSpacePoint;
+                }
             }
         }
 
@@ -237,125 +219,127 @@ class NodeTypeFinderService
         return $this->limitExceeded;
     }
 
-    private function findNodeTypeOccurrencesInDimensionCombinations(
+    /**
+     * @return iterable<int, array{Node, ContentSubgraphInterface}>
+     */
+    private function findNodeTypeOccurrencesInSites(
         string $nodeTypeName,
-        ?Site $site,
-        ?array $dimensionValues
+        ?string $siteNodeName,
+        ?DimensionSpacePoint $dimensionSpacePoint
     ): iterable {
-        $dimensionCombinations = $dimensionValues !== null
-            ? [$dimensionValues]
-            : $this->contentDimensionCombinator->getAllAllowedCombinations();
         $count = 0;
 
-        foreach ($dimensionCombinations as $dimensionCombination) {
-            if ($count >= $this->maxResults) {
-                $this->limitExceeded = true;
-                break;
+        foreach ($this->siteRepository->findAll() as $site) {
+            if ($siteNodeName !== null && $site->getNodeName()->value !== $siteNodeName) {
+                continue;
             }
 
-            foreach ($this->findNodeTypeOccurrencesInDimensions($nodeTypeName, $dimensionCombination, $this->maxResults - $count, $site) as $node) {
-                yield $node;
-                $count++;
+            $contentRepository = $this->contentRepositoryRegistry->get($site->getConfiguration()->contentRepositoryId);
+            $dimensionSpacePoints = $dimensionSpacePoint !== null
+                ? [$dimensionSpacePoint]
+                : $contentRepository->getVariationGraph()->getDimensionSpacePoints();
 
+            foreach ($dimensionSpacePoints as $currentDimensionSpacePoint) {
                 if ($count >= $this->maxResults) {
                     $this->limitExceeded = true;
-                    break;
+                    return;
+                }
+
+                $subgraph = $contentRepository->getContentGraph(WorkspaceName::forLive())
+                    ->getSubgraph($currentDimensionSpacePoint, NeosVisibilityConstraints::excludeRemoved());
+                $siteNode = $this->findSiteNode($site, $subgraph);
+                if (!$siteNode) {
+                    continue;
+                }
+
+                $nodes = $subgraph->findDescendantNodes(
+                    $siteNode->aggregateId,
+                    FindDescendantNodesFilter::create(
+                        nodeTypes: $nodeTypeName,
+                        pagination: ['limit' => $this->maxResults - $count, 'offset' => 0]
+                    )
+                );
+
+                foreach ($nodes as $node) {
+                    yield [$node, $subgraph];
+                    $count++;
+
+                    if ($count >= $this->maxResults) {
+                        $this->limitExceeded = true;
+                        return;
+                    }
                 }
             }
         }
     }
 
-    private function findNodeTypeOccurrencesInDimensions(
-        string $nodeTypeName,
-        array $dimensionValues,
-        int $remainingLimit,
-        ?Site $site
-    ): iterable {
-        $contextProperties = [
-            'workspaceName' => 'live',
-            'dimensions' => $dimensionValues,
-            'invisibleContentShown' => true,
-        ];
-        if ($site !== null) {
-            $contextProperties['currentSite'] = $site;
-        }
-        $context = $this->contextFactory->create($contextProperties);
+    private function findSiteNode(Site $site, ContentSubgraphInterface $subgraph): ?Node
+    {
+        $sitesNode = $subgraph->findRootNodeByType(NodeTypeNameFactory::forSites());
 
-        if ($site !== null && $context instanceof ContentContext) {
-            $startingPoint = $context->getCurrentSiteNode();
-        } else {
-            $startingPoint = $context->getRootNode();
-        }
-
-        if (!$startingPoint instanceof NodeInterface) {
-            return;
-        }
-
-        yield from (new FlowQuery([$startingPoint]))
-            ->find('[instanceof '.$nodeTypeName.']')
-            ->slice(0, $remainingLimit)
-            ->get();
+        return $sitesNode ? $subgraph->findNodeByPath($site->getNodeName()->toNodeName(), $sitesNode->aggregateId) : null;
     }
 
-    private function buildDimensionCombinationLabel(array $dimensionValues): string
+    private function getCurrentSite(): ?Site
     {
-        $presets = $this->contentDimensionPresetSource->findPresetsByTargetValues($dimensionValues);
+        $domain = $this->domainRepository->findOneByActiveRequest();
+
+        return $domain !== null ? $domain->getSite() : $this->siteRepository->findDefault();
+    }
+
+    /**
+     * @return array<string, ContentRepository>
+     */
+    private function getContentRepositories(): array
+    {
+        $contentRepositories = [];
+        foreach ($this->siteRepository->findAll() as $site) {
+            $contentRepositoryId = $site->getConfiguration()->contentRepositoryId;
+            $contentRepositories[$contentRepositoryId->value] ??= $this->contentRepositoryRegistry->get($contentRepositoryId);
+        }
+
+        return $contentRepositories;
+    }
+
+    private function buildDimensionCombinationLabel(ContentRepository $contentRepository, DimensionSpacePoint $dimensionSpacePoint): string
+    {
+        $contentDimensionSource = $contentRepository->getContentDimensionSource();
 
         $labels = [];
-        foreach ($dimensionValues as $dimensionName => $values) {
-            $preset = $presets[$dimensionName] ?? null;
-            $labels[] = $preset['label'] ?? reset($values);
+        foreach ($dimensionSpacePoint->coordinates as $dimensionName => $value) {
+            $dimensionValue = $contentDimensionSource->getDimension(new ContentDimensionId($dimensionName))?->getValue($value);
+            $labels[] = $dimensionValue?->getConfigurationValue('label') ?? $value;
         }
 
         return implode(', ', $labels);
     }
 
-    private static function serializeDimensionValues(array $dimensionValues): string
+    public function findClosestDocumentNode(Node $node, ContentSubgraphInterface $subgraph): ?Node
     {
-        return json_encode($dimensionValues, JSON_THROW_ON_ERROR);
-    }
-
-    public function findClosestDocumentNode(NodeInterface $node): ?NodeInterface
-    {
-        $documentQuery = new FlowQuery([$node]);
-        $documentNode = $documentQuery->closest('[instanceof Neos.Neos:Document]')->get(0);
-
-        return $documentNode instanceof NodeInterface ? $documentNode : null;
-    }
-
-    public function isNodeVisible(NodeInterface $node): bool
-    {
-        $parent = $node;
-        while ($parent !== null) {
-            if (!$parent->isVisible()) {
-                return false;
-            }
-            $parent = $parent->getParent();
-        }
-
-        return true;
-    }
-
-    public function buildNodeUri(NodeInterface $node, ControllerContext $controllerContext, bool $visible): ?string
-    {
-        if (!$visible) {
-            $newProperties = array_merge($node->getContext()->getProperties(), [
-                'workspaceName' => $this->userService->getPersonalWorkspaceName() ?? 'live',
-            ]);
-            $node = $this->contextFactory->create($newProperties)->getNodeByIdentifier($node->getIdentifier());
-
-            if (!$node) {
-                return null;
-            }
-        }
-
-        return $this->linkingService->createNodeUri(
-            $controllerContext,
-            $node,
-            null,
-            null,
-            true
+        return $subgraph->findClosestNode(
+            $node->aggregateId,
+            FindClosestNodeFilter::create(nodeTypes: NodeTypeNameFactory::NAME_DOCUMENT)
         );
+    }
+
+    public function isNodeVisible(Node $node): bool
+    {
+        return !$node->tags->contain(NeosSubtreeTag::disabled());
+    }
+
+    public function buildNodeUri(Node $node, NodeUriBuilder $nodeUriBuilder, bool $visible): ?string
+    {
+        $nodeAddress = NodeAddress::fromNode($node);
+
+        if (!$visible) {
+            return (string)$nodeUriBuilder->previewUriFor($nodeAddress);
+        }
+
+        try {
+            return (string)$nodeUriBuilder->uriFor($nodeAddress, Options::createForceAbsolute());
+        } catch (NoMatchingRouteException) {
+            return null;
+        }
     }
 
 }
